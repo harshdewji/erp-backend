@@ -5,9 +5,7 @@ const db = require('../config/db');
 const initDb = async () => {
   // Run SQL files in the correct dependency order
   const sqlFiles = [
-    'schema.sql',           // Core tables (users, courses, students, etc.)
-    'edusec_extension.sql', // Inquiries, timetable, HRMS, payroll
-    'extra_features.sql',   // Placements, alumni, messaging, events
+    'schema.sql',           // Consolidated Master Schema
   ];
 
   for (const file of sqlFiles) {

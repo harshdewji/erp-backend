@@ -1,12 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { addStudent, getAllStudents, updateStudent, deleteStudent } = require('../controllers/studentController');
+const { addStudent, getAllStudents, updateStudent, deleteStudent, getStudentByUserId } = require('../controllers/studentController');
 const { protect } = require('../middlewares/authMiddleware');
 const { authorize } = require('../middlewares/roleMiddleware');
 
 router.route('/')
   .get(protect, getAllStudents)
   .post(protect, authorize('Admin'), addStudent);
+
+router.get('/user/:userId', protect, getStudentByUserId);
 
 router.route('/:id')
   .put(protect, authorize('Admin', 'Teacher'), updateStudent)

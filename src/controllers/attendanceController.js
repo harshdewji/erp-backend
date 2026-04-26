@@ -46,7 +46,13 @@ const markAttendance = async (req, res) => {
 // @route   GET /api/attendance/student/:id
 // @access  Private
 const getAttendanceByStudent = async (req, res) => {
-  const { id } = req.params;
+  let { id } = req.params;
+
+  // Translation if student is fetching their own by user.id
+  if (req.user.role === 'Student' && id == req.user.id) {
+    const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+    if (studentInfo.rows.length > 0) id = studentInfo.rows[0].id;
+  }
 
   try {
     const result = await db.query(

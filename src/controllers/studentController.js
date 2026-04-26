@@ -5,7 +5,15 @@ const bcrypt = require('bcryptjs');
 // @route   POST /api/students
 // @access  Private/Admin
 const addStudent = async (req, res) => {
-  const { name, email, password, course_id } = req.body;
+  const { 
+    name, email, password, course_id, 
+    blood_group, medical_history, academic_history, 
+    class_name, section, enrollment_status 
+  } = req.body;
+
+  // Automated generation of unique identifiers
+  const student_id_number = req.body.student_id_number || `STU${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000)}`;
+  const roll_number = req.body.roll_number || `R${Math.floor(Math.random() * 100000)}`;
 
   try {
     const salt = await bcrypt.genSalt(10);
@@ -22,8 +30,14 @@ const addStudent = async (req, res) => {
     const userId = userResult.rows[0].id;
 
     const studentResult = await db.query(
-      'INSERT INTO students (user_id, course_id) VALUES ($1, $2) RETURNING *',
-      [userId, course_id]
+      `INSERT INTO students 
+        (user_id, course_id, student_id_number, roll_number, blood_group, medical_history, academic_history, class_name, section, enrollment_status) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [
+        userId, course_id, student_id_number, roll_number, 
+        blood_group, medical_history, academic_history, 
+        class_name, section, enrollment_status || 'Active'
+      ]
     );
 
     await db.query('COMMIT');
@@ -44,7 +58,10 @@ const addStudent = async (req, res) => {
 const getAllStudents = async (req, res) => {
   try {
     const students = await db.query(`
-      SELECT s.id, u.name, u.email, c.name as course_name 
+      SELECT 
+        s.*, 
+        u.name, u.email, u.profile_image, 
+        c.name as course_name 
       FROM students s
       JOIN users u ON s.user_id = u.id
       LEFT JOIN courses c ON s.course_id = c.id
@@ -60,7 +77,11 @@ const getAllStudents = async (req, res) => {
 // @access  Private/Admin
 const updateStudent = async (req, res) => {
   const { id } = req.params;
-  const { name, email, course_id } = req.body;
+  const { 
+    name, email, course_id, 
+    blood_group, medical_history, academic_history, 
+    class_name, section, enrollment_status 
+  } = req.body;
 
   try {
     // Get user_id first
@@ -73,8 +94,22 @@ const updateStudent = async (req, res) => {
 
     await db.query('BEGIN');
     
-    await db.query('UPDATE users SET name = $1, email = $2 WHERE id = $3', [name, email, userId]);
-    await db.query('UPDATE students SET course_id = $1 WHERE id = $2', [course_id, id]);
+    if (name || email) {
+      await db.query('UPDATE users SET name = COALESCE($1, name), email = COALESCE($2, email) WHERE id = $3', [name, email, userId]);
+    }
+    
+    await db.query(`
+      UPDATE students 
+      SET 
+        course_id = COALESCE($1, course_id),
+        blood_group = COALESCE($2, blood_group),
+        medical_history = COALESCE($3, medical_history),
+        academic_history = COALESCE($4, academic_history),
+        class_name = COALESCE($5, class_name),
+        section = COALESCE($6, section),
+        enrollment_status = COALESCE($7, enrollment_status)
+      WHERE id = $8
+    `, [course_id, blood_group, medical_history, academic_history, class_name, section, enrollment_status, id]);
 
     await db.query('COMMIT');
 
@@ -108,4 +143,28 @@ const deleteStudent = async (req, res) => {
   }
 };
 
-module.exports = { addStudent, getAllStudents, updateStudent, deleteStudent };
+// @desc    Get student by User ID
+// @route   GET /api/students/user/:userId
+// @access  Private
+const getStudentByUserId = async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const student = await db.query(`
+      SELECT s.*, u.name, u.email, c.name as course_name 
+      FROM students s
+      JOIN users u ON s.user_id = u.id
+      LEFT JOIN courses c ON s.course_id = c.id
+      WHERE s.user_id = $1
+    `, [userId]);
+
+    if (student.rows.length === 0) {
+      return res.status(404).json({ message: 'Student details not found' });
+    }
+
+    res.json(student.rows[0]);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { addStudent, getAllStudents, updateStudent, deleteStudent, getStudentByUserId };

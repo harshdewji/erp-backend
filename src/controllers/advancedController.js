@@ -37,7 +37,14 @@ const addFeeRecord = async (req, res) => {
 };
 
 const getFeesByStudent = async (req, res) => {
-  const { studentId } = req.params;
+  let { studentId } = req.params;
+  
+  // If student is fetching their own, we might need to translate user.id to student.id
+  if (req.user.role === 'Student' && studentId == req.user.id) {
+    const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+    if (studentInfo.rows.length > 0) studentId = studentInfo.rows[0].id;
+  }
+
   try {
     const result = await db.query('SELECT f.*, f.total_amount as amount FROM fee_records f WHERE f.student_id = $1 ORDER BY f.due_date DESC', [studentId]);
     res.json(result.rows);
@@ -51,7 +58,8 @@ const getAllFees = async (req, res) => {
     const result = await db.query(`
       SELECT f.*, f.total_amount as amount, u.name as student_name
       FROM fee_records f
-      JOIN users u ON f.student_id = u.id
+      JOIN students s ON f.student_id = s.id
+      JOIN users u ON s.user_id = u.id
       ORDER BY f.due_date DESC
     `);
     res.json(result.rows);
@@ -66,7 +74,8 @@ const downloadFeeReceipt = async (req, res) => {
     const fee = await db.query(`
       SELECT f.*, u.name as student_name, u.email 
       FROM fee_records f
-      JOIN users u ON f.student_id = u.id
+      JOIN students s ON f.student_id = s.id
+      JOIN users u ON s.user_id = u.id
       WHERE f.id = $1
     `, [feeId]);
 
@@ -109,7 +118,14 @@ const addResult = async (req, res) => {
 };
 
 const getResultsByStudent = async (req, res) => {
-  const { studentId } = req.params;
+  let { studentId } = req.params;
+
+  // Translation if needed
+  if (req.user.role === 'Student' && studentId == req.user.id) {
+    const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+    if (studentInfo.rows.length > 0) studentId = studentInfo.rows[0].id;
+  }
+
   try {
     const result = await db.query(`
       SELECT r.*, e.name as exam_name, e.date as exam_date, c.name as course_name
@@ -178,6 +194,46 @@ module.exports = {
   // ... including existing dashboard/notification methods
   getDashboardStats: async (req, res) => {
     try {
+      if (req.user.role === 'Student') {
+        // Get the actual student_id from the students table using the user_id
+        const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+        
+        if (studentInfo.rows.length === 0) {
+          return res.json({
+            isStudent: true,
+            attendance_pct: 0,
+            avg_marks: 0,
+            pending_fees: 0,
+            course_name: 'Not Enrolled',
+            recentResults: []
+          });
+        }
+
+        const studentId = studentInfo.rows[0].id;
+
+        const stats = await db.query(`
+          SELECT 
+            (SELECT COUNT(*) FROM attendance WHERE student_id = $1 AND status = 'Present')*100.0 / NULLIF((SELECT COUNT(*) FROM attendance WHERE student_id = $1), 0) as attendance_pct,
+            (SELECT AVG(marks) FROM results WHERE student_id = $1) as avg_marks,
+            (SELECT COALESCE(SUM(total_amount - paid_amount), 0) FROM fee_records WHERE student_id = $1 AND status != 'Paid') as pending_fees,
+            (SELECT c.name FROM students s JOIN courses c ON s.course_id = c.id WHERE s.id = $1) as course_name
+        `, [studentId]);
+        
+        const recentResults = await db.query(`
+          SELECT r.*, e.name as exam_name, e.subject 
+          FROM results r 
+          JOIN exams e ON r.exam_id = e.id 
+          WHERE r.student_id = $1 
+          ORDER BY e.date DESC LIMIT 5
+        `, [studentId]);
+
+        return res.json({
+          isStudent: true,
+          ...stats.rows[0],
+          recentResults: recentResults.rows
+        });
+      }
+
       const stats = await db.query(`
         SELECT 
           (SELECT COUNT(*) FROM students) as total_students,
@@ -230,6 +286,7 @@ module.exports = {
       `);
 
       res.json({ 
+        isStudent: false,
         ...stats.rows[0], 
         topStudents: topStudents.rows,
         recentEvents: recentEvents.rows,
@@ -353,12 +410,16 @@ module.exports = {
         
       if (razorpay_order_id.startsWith('order_mock_') || expectedSignature === razorpay_signature) {
         // Payment is verified (or bypassed in mock mode)
+        const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+        if (studentInfo.rows.length === 0) return res.status(404).json({ message: 'Student profile not found' });
+        const studentId = studentInfo.rows[0].id;
+
         const updateResult = await db.query(`
           UPDATE fee_records 
           SET status = 'Paid', paid_amount = total_amount 
           WHERE student_id = $1 AND status = 'Pending'
           RETURNING *
-        `, [req.user.id]);
+        `, [studentId]);
         
         res.json({ message: "Payment verified successfully", updated: updateResult.rows.length });
       } else {
@@ -372,14 +433,16 @@ module.exports = {
 
   settleFees: async (req, res) => {
     try {
-      // Update all pending records for this student to 'Paid'
-      // The fee_records table links student_id to users.id
+      const studentInfo = await db.query('SELECT id FROM students WHERE user_id = $1', [req.user.id]);
+      if (studentInfo.rows.length === 0) return res.status(404).json({ message: 'Student profile not found' });
+      const studentId = studentInfo.rows[0].id;
+
       const updateResult = await db.query(`
         UPDATE fee_records 
         SET status = 'Paid', paid_amount = total_amount 
         WHERE student_id = $1 AND status = 'Pending'
         RETURNING *
-      `, [req.user.id]);
+      `, [studentId]);
 
       if (updateResult.rows.length === 0) {
         return res.status(200).json({ message: 'No outstanding arrears found for settlement.', updated: 0 });
